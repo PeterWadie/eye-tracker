@@ -1,0 +1,15 @@
+{
+  "camera_index": 0,
+  "width": 640,
+  "height": 480,
+  "fps": 30,
+  "log_downsample_rate": 2,
+  "ear_blink_threshold": 0.2,
+  "ear_closed_secs": 3.0,
+  "shape_predictor_path": "models/shape_predictor_68_face_landmarks.dat",
+  "dnn_model": {
+    "prototxt": "models/deploy.prototxt",
+    "caffemodel": "models/res10_300x300_ssd_iter_140000_fp16.caffemodel",
+    "conf_threshold": 0.5
+  }
+}
