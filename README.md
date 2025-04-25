@@ -56,16 +56,16 @@ mkdir -p models
 
 # 1) Dlib 68-point facial landmark predictor
 wget http://dlib.net/files/shape_predictor_68_face_landmarks.dat.bz2 \
-     -O models/shape_predictor_68_face_landmarks.dat.bz2 :contentReference[oaicite:0]{index=0}
+     -O models/shape_predictor_68_face_landmarks.dat.bz2
 bzip2 -d models/shape_predictor_68_face_landmarks.dat.bz2
 
 # 2) OpenCV DNN face detector definition (.prototxt)
 wget https://raw.githubusercontent.com/opencv/opencv/master/samples/dnn/face_detector/deploy.prototxt \
-     -O models/deploy.prototxt :contentReference[oaicite:1]{index=1}
+     -O models/deploy.prototxt
 
 # 3) OpenCV DNN face detector weights (FP16 Caffe model)
 wget https://raw.githubusercontent.com/spmallick/learnopencv/master/FaceDetectionComparison/models/res10_300x300_ssd_iter_140000_fp16.caffemodel \
-     -O models/res10_300x300_ssd_iter_140000_fp16.caffemodel :contentReference[oaicite:2]{index=2}
+     -O models/res10_300x300_ssd_iter_140000_fp16.caffemodel
 ```
 
 ## Local (Native) Setup & Run
