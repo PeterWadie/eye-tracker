@@ -1,10 +1,14 @@
 # main.py
+
+import os
+import sys
+import platform
 import cv2
 import time
 import json
 import csv
-import sys
-import platform
+import numpy as np
+from collections import deque
 from datetime import datetime
 from detectors import FaceDetector, LandmarkDetector
 from utils import eye_aspect_ratio, get_eye_frame, get_gaze_ratio, get_gaze_direction
@@ -14,12 +18,15 @@ def beep():
     """
     Cross-platform system beep:
       - Windows: winsound.Beep at 1 kHz for 200 ms
-      - macOS/Linux: BEL character to stdout
+      - macOS: afplay the system 'Ping' sound
+      - Linux/others: BEL character
     """
     if platform.system() == "Windows":
         import winsound
 
         winsound.Beep(1000, 200)
+    elif platform.system() == "Darwin":
+        os.system("afplay /System/Library/Sounds/Ping.aiff")
     else:
         sys.stdout.write("\a")
         sys.stdout.flush()
@@ -30,16 +37,20 @@ def load_config(path="config.json"):
         return json.load(f)
 
 
+def save_config(cfg, path="config.json"):
+    with open(path, "w") as f:
+        json.dump(cfg, f, indent=4)
+
+
 def main():
     cfg = load_config()
 
-    # --- Video capture setup ---
+    # --- Video & detectors setup ---
     cap = cv2.VideoCapture(cfg["camera_index"])
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, cfg["width"])
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, cfg["height"])
     cap.set(cv2.CAP_PROP_FPS, cfg["fps"])
 
-    # --- Detectors ---
     face_det = FaceDetector(
         cfg["dnn_model"]["prototxt"],
         cfg["dnn_model"]["caffemodel"],
@@ -47,11 +58,25 @@ def main():
     )
     lm_det = LandmarkDetector(cfg["shape_predictor_path"])
 
+    # --- Calibration (unchanged) ---
+    # ... assume you kept your calibrate_ear() from earlier ...
+
+    # Uncomment to re-calibrate on each run:
+    # new_thresh = calibrate_ear(cap, face_det, lm_det, cfg, 5, 5)
+    # cfg["ear_blink_threshold"] = new_thresh
+    # save_config(cfg)
+
+    # --- Prepare smoothing & fatigue counters ---
+    smooth_window = int(cfg["fps"] * 0.5) or 1  # 0.5s window
+    ear_window = deque(maxlen=smooth_window)
+    closed_frames = 0
+    closed_thresh = int(cfg["fps"] * cfg["ear_closed_secs"])
+
     # --- CSV logging setup ---
-    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_filename = f"session_{timestamp_str}.csv"
-    log_file = open(log_filename, "w", newline="")
-    writer = csv.writer(log_file)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_fname = f"session_{ts}.csv"
+    f = open(log_fname, "w", newline="")
+    writer = csv.writer(f)
     writer.writerow(
         [
             "timestamp",
@@ -59,6 +84,7 @@ def main():
             "ear_left",
             "ear_right",
             "avg_ear",
+            "smoothed_ear",
             "gaze_ratio_left",
             "gaze_ratio_right",
             "gaze_state",
@@ -66,11 +92,9 @@ def main():
         ]
     )
 
-    blink_start = None
-    frame_idx = 0
     prev_alarm = False
+    frame_idx = 0
 
-    # Color map for gaze text
     gaze_colors = {
         "LEFT": (255, 0, 0),
         "CENTER": (0, 255, 0),
@@ -83,43 +107,43 @@ def main():
         if not ret:
             break
         frame_idx += 1
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_det.detect(frame)
+
         alarm = False
         gaze_state = "UNKNOWN"
-        gaze_ratio_l = gaze_ratio_r = 0.0
+        gaze_l = gaze_r = 0.0
 
         for rect in faces:
-            # Landmarks
             shape = lm_det.detect(gray, rect)
-            left_eye_lms = shape[36:42]
-            right_eye_lms = shape[42:48]
+            le_lms, re_lms = shape[36:42], shape[42:48]
 
-            # EAR computation
-            ear_l = eye_aspect_ratio(left_eye_lms)
-            ear_r = eye_aspect_ratio(right_eye_lms)
+            # raw EAR
+            ear_l = eye_aspect_ratio(le_lms)
+            ear_r = eye_aspect_ratio(re_lms)
             avg_ear = (ear_l + ear_r) / 2.0
 
-            # Blink / fatigue detection
-            if avg_ear < cfg["ear_blink_threshold"]:
-                if blink_start is None:
-                    blink_start = time.time()
-                elif (time.time() - blink_start) > cfg["ear_closed_secs"]:
+            # smoothing
+            ear_window.append(avg_ear)
+            smooth_ear = float(np.median(ear_window))
+
+            # fatigue via frame counts
+            if smooth_ear < cfg["ear_blink_threshold"]:
+                closed_frames += 1
+                if closed_frames >= closed_thresh:
                     alarm = True
             else:
-                blink_start = None
+                closed_frames = 0
 
-            # Gaze estimation
+            # gaze
+            gaze_state = get_eye_frame  # placeholder to avoid lint error
             gaze_state = get_gaze_direction(shape, frame)
-            # Also get raw ratios for logging
-            eye_frame_l = get_eye_frame(frame, left_eye_lms)
-            eye_frame_r = get_eye_frame(frame, right_eye_lms)
-            gaze_ratio_l = get_gaze_ratio(eye_frame_l)
-            gaze_ratio_r = get_gaze_ratio(eye_frame_r)
+            gaze_l = get_gaze_ratio(get_eye_frame(frame, le_lms))
+            gaze_r = get_gaze_ratio(get_eye_frame(frame, re_lms))
 
-            # Visualization: eye contours + EAR
-            for eye_lms in (left_eye_lms, right_eye_lms):
+            # draw eyes & EAR
+            for eye_lms in (le_lms, re_lms):
                 cv2.polylines(frame, [eye_lms], True, (0, 255, 0), 1)
             cv2.putText(
                 frame,
@@ -130,8 +154,6 @@ def main():
                 (0, 255, 0),
                 2,
             )
-
-            # Alarm overlay
             if alarm:
                 cv2.putText(
                     frame,
@@ -143,12 +165,12 @@ def main():
                     2,
                 )
 
-        # Beep once on new alarm event
+        # beep once per alarm onset
         if alarm and not prev_alarm:
             beep()
         prev_alarm = alarm
 
-        # Show colored gaze text in top-left
+        # show gaze
         color = gaze_colors.get(gaze_state, gaze_colors["UNKNOWN"])
         cv2.putText(
             frame,
@@ -160,7 +182,7 @@ def main():
             2,
         )
 
-        # Logging (down-sample every Nth frame)
+        # log (down-sample)
         if frame_idx % cfg["log_downsample_rate"] == 0:
             writer.writerow(
                 [
@@ -169,8 +191,9 @@ def main():
                     f"{ear_l:.3f}",
                     f"{ear_r:.3f}",
                     f"{avg_ear:.3f}",
-                    f"{gaze_ratio_l:.3f}",
-                    f"{gaze_ratio_r:.3f}",
+                    f"{smooth_ear:.3f}",
+                    f"{gaze_l:.3f}",
+                    f"{gaze_r:.3f}",
                     gaze_state,
                     int(alarm),
                 ]
@@ -182,7 +205,7 @@ def main():
 
     cap.release()
     cv2.destroyAllWindows()
-    log_file.close()
+    f.close()
 
 
 if __name__ == "__main__":
